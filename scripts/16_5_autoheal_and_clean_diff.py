@@ -1,0 +1,496 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+16_5_autoheal_and_clean_diff.py
+--------------------------------------------------------------------------------
+TASK 16.5: Auto-heal broken "House" / "Дом" saves from v2.0-v2.2 & Clean Diffs
+--------------------------------------------------------------------------------
+Author: Antigravity (Google DeepMind)
+Target Game: Cruelty Squad (Godot Engine v3.x)
+"""
+
+import os
+import sys
+import struct
+import json
+import hashlib
+import re
+import shutil
+import time
+import difflib
+from pathlib import Path
+from typing import Dict, Any, List, Tuple, Set
+
+# Reconfigure console output to UTF-8
+if sys.stdout.encoding != "utf-8":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
+PCK_MAGIC = b"GDPC"
+PCK_FORMAT_VERSION = 1
+PCK_HEADER_SIZE = 88
+FILE_ALIGNMENT = 16
+
+FONTS_TO_IMPORT = [
+    "res://Fonts/MingLiU-ExtB-01.ttf",
+    "res://Fonts/gamefont(1).ttf",
+    "res://Fonts/gamefont.ttf",
+]
+
+STEX_TO_IMPORT = [
+    "res://.import/Misery_Achieved.png-c258c1f600a358f228fcb3cee8a3b4d9.stex",
+    "res://.import/Soul_Rended.png-f59fc37014a0d66d7570cbe8018df385.stex",
+    "res://.import/ending2face.png-0a76daf9337823202a1f7b99bfe2981e.s3tc.stex",
+    "res://.import/ending2face.png-0cba63e81c5b558cca967bb717ba984e.s3tc.stex",
+    "res://.import/gorbino.png-2a2ee8205345cb3889d9ae67826ce45a.s3tc.stex",
+    "res://.import/store_punishment.png-3c139239c2f9b91de9121602fb5d6bb3.s3tc.stex",
+    "res://.import/title1.png-a1bb4ee083219025e0ecce91a09c21ba.stex",
+    "res://.import/title11.png-21e54c121bd05711c72e3e99d7ca5ed3.stex",
+]
+
+
+class AutoHealAndCleanDiffTool:
+    def __init__(self, base_dir: Path):
+        self.base_dir = base_dir
+        self.vanilla_dir = base_dir / "vanilla_new"
+        self.patched_dir = base_dir / "_patched_files"
+        self.pck_dir = base_dir / "_source_pcks"
+
+        self.vanilla_pck_path = self.pck_dir / "vanilla_steam.pck"
+        self.ru_pck_path = self.pck_dir / "ru_2021.pck"
+        self.output_pck_path = base_dir / "crueltysquad_ru_v2.pck"
+        self.root_pck_path = Path("C:/dev/crueltysquad_ru_v2.pck")
+        self.compat_pck_path = base_dir / "crueltysquad.pck"
+        self.root_compat_pck_path = Path("C:/dev/crueltysquad.pck")
+        self.steam_pck_path = Path("C:/Program Files (x86)/Steam/steamapps/common/Cruelty Squad/crueltysquad.pck")
+
+    def run_all(self):
+        print("=" * 80)
+        print(" CRUELTY SQUAD RUSSIAN LOCALIZATION — TASK 16.5")
+        print(" Auto-heal Broken Saves & Clean Diffs for House Purchase")
+        print("=" * 80)
+
+        self.step1_apply_clean_fixes()
+        self.step2_display_unified_diffs()
+        self.step3_prepack_linter()
+        self.step4_binary_pck_rebuild()
+        print("\n[+] TASK 16.5 COMPLETED SUCCESSFULLY!")
+
+    def step1_apply_clean_fixes(self):
+        print("\n[*] [1/4] Applying clean, surgical fixes to Game_Manager.gd and Character_Menu.gd...")
+
+        # 1. Game_Manager.gd
+        gm_path = self.patched_dir / "Entities/Game_Manager.gd"
+        gm_lines = gm_path.read_text(encoding="utf-8").splitlines()
+
+        # Line 830 (0-indexed: 829): single clean one-liner
+        gm_lines[829] = '\t\t\tBONUS_UNLOCK = bonus_levels_unlocked; if BONUS_UNLOCK.find("Дом") != - 1 and BONUS_UNLOCK.find("House") == - 1: BONUS_UNLOCK.append("House")'
+
+        # Line 880 (0-indexed: 879): auto-healing without nested ; if
+        gm_lines[879] = '\t\t\timplants.purchased_implants = new_implants_unlocked; if implants.purchased_implants.find("Дом") != - 1 or implants.purchased_implants.find("House") != - 1: implants.purchased_implants.erase("Дом"); implants.purchased_implants.append("Дом"); BONUS_UNLOCK.erase("House"); BONUS_UNLOCK.append("House")'
+
+        gm_path.write_text("\n".join(gm_lines) + "\n", encoding="utf-8", newline="\n")
+        print("    -> Updated Entities/Game_Manager.gd")
+
+        # 2. Character_Menu.gd
+        cm_path = self.patched_dir / "Menu/Character_Menu.gd"
+        cm_lines = cm_path.read_text(encoding="utf-8").splitlines()
+
+        # Line 120 (0-indexed: 119): Typo fix
+        cm_lines[119] = '\t\t\thover_info.get_node("Hint").text = "Где-то в этом мире что-то ждёт тебя."'
+
+        # Line 175 (0-indexed: 174): Append only system key "House"
+        cm_lines[174] = '\t\t\t\t\tif Global.BONUS_UNLOCK.find("House") == - 1: Global.BONUS_UNLOCK.append("House")'
+
+        cm_path.write_text("\n".join(cm_lines) + "\n", encoding="utf-8", newline="\n")
+        print("    -> Updated Menu/Character_Menu.gd")
+
+    def step2_display_unified_diffs(self):
+        print("\n" + "=" * 80)
+        print(" [*] [2/4] UNIFIED DIFFS (vanilla_new vs _patched_files)")
+        print("=" * 80)
+
+        for rel in ["Entities/Game_Manager.gd", "Menu/Character_Menu.gd"]:
+            v_path = self.vanilla_dir / rel
+            p_path = self.patched_dir / rel
+            v_lines = v_path.read_text(encoding="utf-8").splitlines(keepends=True)
+            p_lines = p_path.read_text(encoding="utf-8").splitlines(keepends=True)
+
+            diff = list(difflib.unified_diff(
+                v_lines,
+                p_lines,
+                fromfile=f"vanilla_new/{rel}",
+                tofile=f"_patched_files/{rel}",
+                n=3
+            ))
+            print(f"\n--- Unified Diff: {rel} ---")
+            for l in diff:
+                print(l, end="")
+
+    def step3_prepack_linter(self):
+        print("\n" + "=" * 80)
+        print(" [*] [3/4] RUNNING STRICT PRE-PACK LINTER")
+        print("=" * 80)
+
+        gd_files = sorted(list(self.patched_dir.rglob("*.gd")))
+        tscn_files = sorted(list(self.patched_dir.rglob("*.tscn")))
+        json_files = sorted(list(self.patched_dir.rglob("*.json")))
+
+        violations: List[str] = []
+        speech_script_names = {"Menu/Speech.gd", "Scripts/speech_label.gd"}
+
+        # 1. GDScript Strict Audit
+        print(f"[*] Auditing {len(gd_files)} GDScript files...")
+        for p in gd_files:
+            rel = p.relative_to(self.patched_dir).as_posix()
+            v_p = self.vanilla_dir / rel
+            p_lines = p.read_text(encoding="utf-8").splitlines()
+
+            if not v_p.exists():
+                violations.append(f"GDScript {rel}: No corresponding vanilla file found!")
+                continue
+
+            v_lines = v_p.read_text(encoding="utf-8").splitlines()
+
+            if rel not in speech_script_names:
+                if len(p_lines) != len(v_lines):
+                    violations.append(f"GDScript {rel}: Line count mismatch! Patched={len(p_lines)}, Vanilla={len(v_lines)}")
+
+                for lno, (pl, vl) in enumerate(zip(p_lines, v_lines), 1):
+                    if pl.startswith(" ") and not pl.strip().startswith("#"):
+                        violations.append(f"GDScript {rel}:{lno}: Space indentation found: {repr(pl[:30])}")
+
+                    p_tabs = len(pl) - len(pl.lstrip("\t"))
+                    v_tabs = len(vl) - len(vl.lstrip("\t"))
+                    if p_tabs != v_tabs:
+                        violations.append(f"GDScript {rel}:{lno}: Tab indentation mismatch: expected {v_tabs}, got {p_tabs}")
+
+                    code_part = pl.split("#")[0]
+                    sanitized = code_part.replace(r'\"', '').replace(r"\'", '')
+                    if sanitized.count('"') % 2 != 0:
+                        violations.append(f"GDScript {rel}:{lno}: Unbalanced double-quotes!")
+            else:
+                last_indent = 0
+                expect_increase = False
+                for lno, pl in enumerate(p_lines, 1):
+                    if pl.startswith(" ") and not pl.strip().startswith("#"):
+                        violations.append(f"Speech {rel}:{lno}: Space indentation found: {repr(pl[:30])}")
+
+                    stripped = pl.strip()
+                    if not stripped or stripped.startswith("#"):
+                        continue
+
+                    cur_indent = len(pl) - len(pl.lstrip("\t"))
+
+                    if expect_increase:
+                        if cur_indent != last_indent + 1:
+                            violations.append(f"Speech {rel}:{lno}: Expected indent {last_indent + 1} after colon, got {cur_indent}")
+                        expect_increase = False
+                    elif cur_indent > last_indent + 1:
+                        violations.append(f"Speech {rel}:{lno}: Indent jump from {last_indent} to {cur_indent}")
+
+                    code_part = stripped.split("#")[0].strip()
+                    if code_part.endswith(":"):
+                        expect_increase = True
+                        last_indent = cur_indent
+                    else:
+                        last_indent = cur_indent
+
+                    sanitized = code_part.replace(r'\"', '').replace(r"\'", '')
+                    if sanitized.count('"') % 2 != 0:
+                        violations.append(f"Speech {rel}:{lno}: Unbalanced double-quotes!")
+
+            # Bracket balance
+            whole_content = "\n".join(l.split("#")[0] for l in p_lines)
+            code_no_strings = re.sub(r'"([^"\\]|\\.)*"', '""', whole_content)
+            for open_b, close_b in [("(", ")"), ("[", "]"), ("{", "}")]:
+                cnt_open = code_no_strings.count(open_b)
+                cnt_close = code_no_strings.count(close_b)
+                if cnt_open != cnt_close:
+                    violations.append(f"GDScript {rel}: Bracket mismatch for '{open_b}{close_b}': {cnt_open} open vs {cnt_close} close")
+
+        # 2. TSCN Scene Strict Audit
+        print(f"[*] Auditing {len(tscn_files)} TSCN scene files...")
+        for p in tscn_files:
+            rel = p.relative_to(self.patched_dir).as_posix()
+            v_p = self.vanilla_dir / rel
+
+            if v_p.exists():
+                v_lines = v_p.read_text(encoding="utf-8", errors="ignore").splitlines()
+                p_lines = p.read_text(encoding="utf-8", errors="ignore").splitlines()
+                if len(p_lines) != len(v_lines):
+                    violations.append(f"TSCN {rel}: Line count mismatch! Vanilla={len(v_lines)}, Patched={len(p_lines)}")
+
+            content = p.read_text(encoding="utf-8", errors="ignore")
+            ext_ids: Set[str] = set(re.findall(r'\[ext_resource[^\]]+id=(\d+)', content))
+            sub_ids: Set[str] = set(re.findall(r'\[sub_resource[^\]]+id=(\d+)', content))
+
+            ext_usages = set(re.findall(r'ExtResource\(\s*(\d+)\s*\)', content))
+            sub_usages = set(re.findall(r'SubResource\(\s*(\d+)\s*\)', content))
+
+            missing_ext = ext_usages - ext_ids
+            missing_sub = sub_usages - sub_ids
+
+            if missing_ext:
+                violations.append(f"TSCN {rel}: Undefined ExtResource IDs referenced: {missing_ext}")
+            if missing_sub:
+                violations.append(f"TSCN {rel}: Undefined SubResource IDs referenced: {missing_sub}")
+
+            if r'\\"' in content or r'\\\"' in content:
+                violations.append(f"TSCN {rel}: Contains invalid double-escaped quote sequence!")
+
+        # 3. JSON Strict Audit
+        print(f"[*] Auditing {len(json_files)} JSON files...")
+        for p in json_files:
+            rel = p.relative_to(self.patched_dir).as_posix()
+            try:
+                json.loads(p.read_text(encoding="utf-8"))
+            except Exception as e:
+                violations.append(f"JSON {rel}: Parse error: {e}")
+
+        # Summary
+        if violations:
+            print(f"\n[!] LINTER FAILED WITH {len(violations)} VIOLATIONS:")
+            for v in violations:
+                print(f"    - {v}")
+            raise RuntimeError(f"Pre-pack linter failed with {len(violations)} errors. Build aborted.")
+
+        print(f"[+] Linter PASSED 100% with 0 violations across all {len(gd_files)} .gd, {len(tscn_files)} .tscn, and {len(json_files)} .json files!")
+
+    def step4_binary_pck_rebuild(self):
+        print("\n" + "=" * 80)
+        print(" [*] [4/4] REBUILDING crueltysquad_ru_v2.pck (PURE PYTHON, 16-BYTE ALIGNED)")
+        print("=" * 80)
+
+        t0 = time.time()
+
+        with open(self.vanilla_pck_path, "rb") as f:
+            v_hdr = struct.unpack("<4sIIII64xI", f.read(88))
+            vanilla_files = {}
+            for _ in range(v_hdr[5]):
+                plen = struct.unpack("<I", f.read(4))[0]
+                p = f.read(plen).rstrip(b"\x00").decode("utf-8", errors="replace")
+                offset, size, md5 = struct.unpack("<QQ16s", f.read(32))
+                vanilla_files[p] = {"offset": offset, "size": size, "md5": md5}
+
+        with open(self.ru_pck_path, "rb") as f:
+            ru_hdr = struct.unpack("<4sIIII64xI", f.read(88))
+            ru_files = {}
+            for _ in range(ru_hdr[5]):
+                plen = struct.unpack("<I", f.read(4))[0]
+                p = f.read(plen).rstrip(b"\x00").decode("utf-8", errors="replace")
+                offset, size, md5 = struct.unpack("<QQ16s", f.read(32))
+                ru_files[p] = {"offset": offset, "size": size, "md5": md5}
+
+        # Virtual Table
+        virtual_table: Dict[str, Dict[str, Any]] = {}
+
+        # 1. Base vanilla
+        for p, meta in vanilla_files.items():
+            virtual_table[p] = {
+                "type": "vanilla",
+                "offset": meta["offset"],
+                "size": meta["size"],
+                "md5": meta["md5"],
+            }
+
+        # 2. Fonts
+        for font in FONTS_TO_IMPORT:
+            if font in ru_files:
+                virtual_table[font] = {
+                    "type": "ru_pck",
+                    "offset": ru_files[font]["offset"],
+                    "size": ru_files[font]["size"],
+                    "md5": ru_files[font]["md5"],
+                }
+
+        # 3. STEX
+        for stex in STEX_TO_IMPORT:
+            if stex in ru_files:
+                virtual_table[stex] = {
+                    "type": "ru_pck",
+                    "offset": ru_files[stex]["offset"],
+                    "size": ru_files[stex]["size"],
+                    "md5": ru_files[stex]["md5"],
+                }
+
+        # 4. Patched disk files
+        patched_disk_files = [p for p in self.patched_dir.rglob("*.*") if p.is_file()]
+        gdc_removed = 0
+        remap_removed = 0
+        scn_removed = 0
+
+        for disk_p in patched_disk_files:
+            rel = disk_p.relative_to(self.patched_dir).as_posix()
+            res_p = f"res://{rel}"
+            data = disk_p.read_bytes()
+
+            if disk_p.suffix == ".gd":
+                gdc_p = f"res://{rel[:-3]}.gdc"
+                remap_p = f"res://{rel}.remap"
+                if gdc_p in virtual_table:
+                    del virtual_table[gdc_p]
+                    gdc_removed += 1
+                if remap_p in virtual_table:
+                    del virtual_table[remap_p]
+                    remap_removed += 1
+
+            if disk_p.suffix == ".tscn":
+                remap_p = f"res://{rel}.remap"
+                scn_p = f"res://{rel[:-5]}.scn"
+                if remap_p in virtual_table:
+                    del virtual_table[remap_p]
+                    remap_removed += 1
+                if scn_p in virtual_table:
+                    del virtual_table[scn_p]
+                    scn_removed += 1
+
+            virtual_table[res_p] = {
+                "type": "disk",
+                "disk_path": disk_p,
+                "size": len(data),
+                "md5": hashlib.md5(data).digest(),
+            }
+
+        print(f"[*] Virtual table files: {len(virtual_table):,}")
+        print(f"    - Patched disk files integrated: {len(patched_disk_files)}")
+        print(f"    - Stripped old bytecode (.gdc):   {gdc_removed}")
+        print(f"    - Stripped old remaps (.remap):   {remap_removed}")
+        print(f"    - Stripped compiled scenes (.scn): {scn_removed}")
+
+        # Purge checks
+        assert "res://Menu/Speech.gdc" not in virtual_table
+        assert "res://Menu/Speech.gd.remap" not in virtual_table
+        assert "res://Scripts/speech_label.gdc" not in virtual_table
+        assert "res://Scripts/speech_label.gd.remap" not in virtual_table
+
+        # TOC & Offsets
+        sorted_paths = sorted(virtual_table.keys())
+        toc_bytes_len = 88
+        path_info: Dict[str, Tuple[int, bytes]] = {}
+
+        for p in sorted_paths:
+            p_bytes = p.encode("utf-8")
+            raw_len = len(p_bytes)
+            padded_len = (raw_len + 3) & ~3 if (raw_len % 4 != 0) else raw_len
+            padded_bytes = p_bytes.ljust(padded_len, b"\x00")
+            path_info[p] = (padded_len, padded_bytes)
+            toc_bytes_len += 4 + padded_len + 32
+
+        data_start_offset = (toc_bytes_len + (FILE_ALIGNMENT - 1)) & ~(FILE_ALIGNMENT - 1)
+        toc_padding = data_start_offset - toc_bytes_len
+
+        current_offset = data_start_offset
+        file_offsets: Dict[str, int] = {}
+        for p in sorted_paths:
+            entry = virtual_table[p]
+            file_offsets[p] = current_offset
+            size = entry["size"]
+            aligned_size = (size + (FILE_ALIGNMENT - 1)) & ~(FILE_ALIGNMENT - 1)
+            current_offset += aligned_size
+
+        total_expected_size = current_offset
+        print(f"[*] Writing binary PCK ({total_expected_size:,} bytes)...")
+
+        with open(self.vanilla_pck_path, "rb") as f_vanilla, \
+             open(self.ru_pck_path, "rb") as f_ru, \
+             open(self.output_pck_path, "wb") as f_out:
+
+            f_out.write(
+                struct.pack(
+                    "<4sIIII64xI",
+                    PCK_MAGIC,
+                    PCK_FORMAT_VERSION,
+                    3,
+                    5,
+                    2,
+                    len(sorted_paths),
+                )
+            )
+
+            for p in sorted_paths:
+                entry = virtual_table[p]
+                plen, pbytes = path_info[p]
+                f_out.write(
+                    struct.pack(
+                        f"<I{plen}sQQ16s",
+                        plen,
+                        pbytes,
+                        file_offsets[p],
+                        entry["size"],
+                        entry["md5"],
+                    )
+                )
+
+            if toc_padding > 0:
+                f_out.write(b"\x00" * toc_padding)
+
+            chunk_size = 1024 * 1024
+            for p in sorted_paths:
+                entry = virtual_table[p]
+                expected_offset = file_offsets[p]
+                actual_offset = f_out.tell()
+                assert actual_offset == expected_offset, f"Offset mismatch for {p}: {actual_offset} != {expected_offset}"
+
+                src_type = entry["type"]
+                size = entry["size"]
+
+                if src_type == "disk":
+                    with open(entry["disk_path"], "rb") as f_disk:
+                        while chunk := f_disk.read(chunk_size):
+                            f_out.write(chunk)
+                elif src_type == "vanilla":
+                    f_vanilla.seek(entry["offset"])
+                    remaining = size
+                    while remaining > 0:
+                        n = min(remaining, chunk_size)
+                        buf = f_vanilla.read(n)
+                        f_out.write(buf)
+                        remaining -= len(buf)
+                elif src_type == "ru_pck":
+                    f_ru.seek(entry["offset"])
+                    remaining = size
+                    while remaining > 0:
+                        n = min(remaining, chunk_size)
+                        buf = f_ru.read(n)
+                        f_out.write(buf)
+                        remaining -= len(buf)
+
+                cur_pos = f_out.tell()
+                aligned_pos = (cur_pos + (FILE_ALIGNMENT - 1)) & ~(FILE_ALIGNMENT - 1)
+                pad_len = aligned_pos - cur_pos
+                if pad_len > 0:
+                    f_out.write(b"\x00" * pad_len)
+
+        out_size = self.output_pck_path.stat().st_size
+        elapsed = time.time() - t0
+        print(f"[+] PCK Build complete in {elapsed:.2f}s!")
+        print(f"[+] Output PCK size: {out_size:,} bytes ({out_size / (1024*1024):.2f} MB)")
+
+        # Sync mirrors
+        print("[*] Synchronizing output PCK across targets...")
+        shutil.copy2(self.output_pck_path, self.compat_pck_path)
+        print(f"    -> Synced to: {self.compat_pck_path}")
+
+        shutil.copy2(self.output_pck_path, self.root_pck_path)
+        print(f"    -> Synced to: {self.root_pck_path}")
+
+        shutil.copy2(self.output_pck_path, self.root_compat_pck_path)
+        print(f"    -> Synced to: {self.root_compat_pck_path}")
+
+        if self.steam_pck_path.parent.exists():
+            shutil.copy2(self.output_pck_path, self.steam_pck_path)
+            print(f"    -> Synced to Steam directory: {self.steam_pck_path}")
+
+        # Post-verify header
+        with open(self.output_pck_path, "rb") as f:
+            magic, ver, major, minor, patch, file_count = struct.unpack("<4sIIII64xI", f.read(88))
+            assert magic == PCK_MAGIC, "Bad PCK magic!"
+            print(f"[+] Post-verification passed! Files: {file_count:,}, Engine: {major}.{minor}.{patch}")
+
+
+if __name__ == "__main__":
+    tool = AutoHealAndCleanDiffTool(Path("C:/dev/cs_loc"))
+    tool.run_all()
