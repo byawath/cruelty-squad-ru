@@ -14,7 +14,7 @@
 Если вы просто хотите поиграть в **Cruelty Squad** на русском языке (с рабочими достижениями Steam, исправленной озвучкой Хендлера и всеми фиксами) без самостоятельного запуска скриптов сборки — перейдите по ссылке ниже:
 
 - **Руководство Steam (актуальные ссылки и инструкция по установке):** [Актуальный русификатор Cruelty Squad (2026) — Рабочие достижения](https://steamcommunity.com/sharedfiles/filedetails/?id=3835672933)
-- **ModDB Mirror:** *(скоро / coming soon)*
+- **ModDB Mirror:** *https://www.moddb.com/mods/cruelty-squad-russian-localization*
 
 *(If you just want to install the finished Russian localization without running the Python build pipeline, use the official [Steam Community Guide](https://steamcommunity.com/sharedfiles/filedetails/?id=3835672933) above.)*
 
