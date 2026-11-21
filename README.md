@@ -9,6 +9,17 @@
 
 ---
 
+## 📥 Скачать готовый русификатор / Download Ready-to-Play Localization
+
+Если вы просто хотите поиграть в **Cruelty Squad** на русском языке (с рабочими достижениями Steam, исправленной озвучкой Хендлера и всеми фиксами) без самостоятельного запуска скриптов сборки — перейдите по ссылке ниже:
+
+- **Руководство Steam (актуальные ссылки и инструкция по установке):** [Актуальный русификатор Cruelty Squad (2026) — Рабочие достижения](https://steamcommunity.com/sharedfiles/filedetails/?id=3835672933)
+- **ModDB Mirror:** *(скоро / coming soon)*
+
+*(If you just want to install the finished Russian localization without running the Python build pipeline, use the official [Steam Community Guide](https://steamcommunity.com/sharedfiles/filedetails/?id=3835672933) above.)*
+
+---
+
 ## 🇷🇺 Описание (RU)
 
 Набор Python-инструментов для создания полной русской локализации Cruelty Squad — от распаковки `.pck` до финальной сборки и валидации. Весь пайплайн работает без внешних утилит (чистый Python, парсинг бинарного формата Godot 3.x PCK v1).
@@ -55,8 +66,8 @@ A set of Python tools for building a complete Russian localization of Cruelty Sq
 
 ## 📁 Repository Structure
 
-```
-github_export/
+```text
+.
 ├── scripts/
 │   ├── 01_audit_pck.py                    # PCK index parser & binary audit
 │   ├── 02_extract_strings.py              # Safe string extractor
@@ -81,15 +92,6 @@ github_export/
 ├── README.md
 └── CHANGELOG.md
 ```
-
----
-
-## 📥 Download (Ready-to-Play Localization)
-
-If you just want to play in Russian without running the build pipeline:
-
-- **Steam Guide**: *(coming soon)*
-- **ModDB**: *(coming soon)*
 
 ---
 
